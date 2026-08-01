@@ -1,0 +1,203 @@
+@page {
+  size: A4;
+  margin: 17mm 18mm 19mm 18mm;
+}
+
+:root {
+  --navy: #153e75;
+  --blue: #2563eb;
+  --purple: #6d28d9;
+  --green: #059669;
+  --orange: #d97706;
+  --ink: #172033;
+  --slate: #64748b;
+  --line: #cbd5e1;
+  --pale: #f8fafc;
+}
+
+html, body {
+  background: #fff;
+  color: var(--ink);
+  font-family: "Microsoft YaHei", "Noto Sans CJK SC", "PingFang SC", sans-serif;
+  font-size: 9.7pt;
+  line-height: 1.58;
+}
+
+body {
+  margin: 0;
+  counter-reset: figure table;
+}
+
+#title-block-header {
+  position: relative;
+  margin: 0 0 12pt;
+  padding: 15pt 17pt 13pt;
+  border: 1px solid #bfdbfe;
+  border-left: 5px solid var(--blue);
+  border-radius: 7px;
+  background: linear-gradient(135deg, #eff6ff 0%, #ffffff 64%);
+}
+
+#title-block-header::after {
+  content: "HARDWARE-IN-THE-LOOP · TOPOLOGY CO-DESIGN · FALSIFIABLE EVIDENCE";
+  position: absolute;
+  top: 10pt;
+  right: 14pt;
+  color: var(--blue);
+  font-family: Arial, sans-serif;
+  font-size: 6.7pt;
+  font-weight: 700;
+  letter-spacing: 0.5pt;
+}
+
+h1.title {
+  margin: 12pt 0 0;
+  color: var(--navy);
+  font-size: 24pt;
+  line-height: 1.15;
+  letter-spacing: -0.3pt;
+}
+
+p.subtitle {
+  margin: 4pt 0 8pt;
+  color: var(--purple);
+  font-size: 14pt;
+  font-weight: 700;
+}
+
+p.author, p.date {
+  display: inline-block;
+  margin: 1pt 18pt 0 0;
+  color: var(--slate);
+  font-size: 8.5pt;
+}
+
+h1 {
+  margin: 17pt 0 8pt;
+  padding-bottom: 3pt;
+  border-bottom: 1px solid #dbeafe;
+  color: var(--navy);
+  font-size: 16.2pt;
+  line-height: 1.24;
+  break-after: avoid;
+}
+
+h2 {
+  margin: 12pt 0 5pt;
+  color: var(--blue);
+  font-size: 12.2pt;
+  line-height: 1.25;
+  break-after: avoid;
+}
+
+p {
+  margin: 0 0 6.2pt;
+  text-align: justify;
+  text-justify: inter-ideograph;
+  orphans: 2;
+  widows: 2;
+}
+
+strong {
+  color: #102a56;
+}
+
+a {
+  color: var(--blue);
+  text-decoration: none;
+}
+
+blockquote {
+  margin: 8pt 0;
+  padding: 7pt 10pt;
+  border-left: 4px solid var(--purple);
+  background: #f5f3ff;
+  color: #312e81;
+  break-inside: avoid;
+}
+
+ol, ul {
+  margin: 4pt 0 7pt 18pt;
+  padding: 0;
+}
+
+li {
+  margin: 0 0 3.2pt;
+  padding-left: 2pt;
+}
+
+table {
+  width: 100%;
+  margin: 7pt 0 10pt;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 8.25pt;
+  break-inside: avoid;
+}
+
+thead {
+  display: table-header-group;
+}
+
+th, td {
+  border: 1px solid #b8c5d6;
+  padding: 4pt 5pt;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+
+th {
+  background: #eaf2ff;
+  color: var(--navy);
+  font-weight: 700;
+  text-align: left;
+}
+
+tr:nth-child(even) td {
+  background: #fbfdff;
+}
+
+figure {
+  margin: 9pt auto 10pt;
+  padding: 5pt 5pt 4pt;
+  border: 1px solid #e2e8f0;
+  border-radius: 5px;
+  background: #fff;
+  text-align: center;
+  break-inside: avoid;
+}
+
+figure img, p > img {
+  display: block;
+  max-width: 100%;
+  max-height: 184mm;
+  margin: 0 auto;
+  object-fit: contain;
+}
+
+figcaption {
+  margin-top: 4pt;
+  color: #475569;
+  font-size: 7.8pt;
+  line-height: 1.4;
+  text-align: left;
+}
+
+math[display="block"] {
+  display: block;
+  margin: 7pt auto 8pt;
+  padding: 5pt 8pt;
+  border-left: 3px solid #93c5fd;
+  background: #f8fafc;
+  color: #0f2547;
+  text-align: center;
+  font-size: 11pt;
+  break-inside: avoid;
+}
+
+code {
+  font-family: Consolas, "Microsoft YaHei", monospace;
+  color: #0f4c81;
+  font-size: 8pt;
+  overflow-wrap: anywhere;
+}

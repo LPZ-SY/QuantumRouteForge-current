@@ -1,0 +1,15 @@
+.env
+.venv/
+.venv312/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+results/
+output/
+tmp/
+paper/**/rendered*/
+paper/**/qa_media*/
+paper/**/*.docx
+paper/**/*.pdf
+paper/**/*.zip
+paper/**/qa*.html

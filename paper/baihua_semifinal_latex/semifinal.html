@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="zh-CN" xml:lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="generator" content="pandoc 3.10" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes" />
+  <meta name="author" content="参赛团队（姓名、单位待补）" />
+  <title>DeepBlock：拓扑共设计的量子局部搜索</title>
+  <style>
+    /* Default styles provided by pandoc.
+    ** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+    */
+    span.smallcaps{font-variant: small-caps;}
+    div.columns{display: flex; gap: 1.5em;}
+    div.column{flex: auto;}
+    @media screen {
+    div.columns{gap: min(4vw, 1.5em);}
+    div.column{overflow-x: auto;}
+    }
+    div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+    /* The extra [class] is a hack that increases specificity enough to
+       override a similar rule in reveal.js */
+    ul.task-list[class]{list-style: none;}
+    ul.task-list li input[type="checkbox"] {
+      font-size: inherit;
+      width: 0.8em;
+      margin: 0 0.8em 0.2em -1.6em;
+      vertical-align: middle;
+    }
+  </style>
+  <link rel="stylesheet" href="semifinal.css" />
+</head>
+<body>
+<header id="title-block-header">
+<h1 class="title">DeepBlock：拓扑共设计的量子局部搜索</h1>
+<p class="subtitle">Baihua真机上的CVRP闭环证据</p>
+<p class="author">参赛团队（姓名、单位待补）</p>
+<p class="date">量子+优化赛道半决赛论文 · 2026年8月</p>
+</header>
+<h1 id="摘要">摘要</h1>
+<p>在当前量子硬件上做组合优化，最容易得到的是“线路运行成功”，最难回答的是“量子样本究竟贡献了什么”。本项目以容量约束车辆路径问题（CVRP）为对象，提出DeepBlock拓扑共设计混合精化框架：经典端先构造容量可行路线，从相邻车辆边界提取16位客户，并组成三个最多8变量、相邻重叠3客户的局部块；量子端将局部重分配编码为稀疏QUBO，使每条保留的二次项直接对应Baihua处理器上的物理耦合；测量结果返回后，经典端只负责容量修复、真实路线距离计算与严格改善接受。</p>
+<p>论文没有用最终路线结果反推量子贡献，而是给量子核设置独立门槛：对每个8比特QUBO精确枚举256个状态，将能量最低的26个状态预定义为高质量区。Baihua真机在该区域的平均概率质量为27.76%，均匀随机为10.16%，理想QAOA为39.18%。因此，真机相对同一QUBO上的均匀随机实现2.73倍低能富集，增加17.60个百分点；6/6个独立种子方向一致，精确符号翻转检验<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>0.03125</mn></mrow><annotation encoding="application/x-tex">p=0.03125</annotation></semantics></math>。换句话说，真实硬件保留了理想QAOA“超出随机部分”的60.6%，并非输出近似均匀的bitstring。</p>
+<p>正式实验执行36个Baihua任务，每任务4,096 shots，总计147,456
+shots；全部任务0
+SWAP，平均线路深度27.7，平均双量子位门层数13.3。量子候选进入完整CVRP闭环后，在6/6个有局部余量的40客户、4车辆实例上产生严格改善，平均恢复71.4%的局部精确余量。项目同时保存任务ID、校准快照、逻辑与物理QASM、物理映射、原始counts和状态转移，并完成144/144条离线重放。本文的核心结论不是量子加速，而是一个更适合现阶段硬件、也更容易由评委复核的事实：<strong>Baihua真机在拓扑共设计QUBO上形成了显著的低能采样偏置，这一偏置已经被接入真实约束、真实目标和单调接受组成的优化闭环。</strong></p>
+<p><strong>关键词：</strong>
+CVRP；QAOA；QUBO；量子-经典混合优化；超导量子计算；候选质量；拓扑共设计</p>
+<figure>
+<img src="figures/fig01_graphical_abstract.png" style="width:100.0%"
+alt="DeepBlock系统总览与核心结果。量子处理器只承担候选生成，经典端承担约束与真实目标；这使量子贡献能够被单独检验。" />
+<figcaption
+aria-hidden="true">DeepBlock系统总览与核心结果。量子处理器只承担候选生成，经典端承担约束与真实目标；这使量子贡献能够被单独检验。</figcaption>
+</figure>
+<h1 id="评委真正需要判断的问题">1. 评委真正需要判断的问题</h1>
+<p>CVRP同时包含客户分配、访问顺序、车辆容量和子回路约束。直接位置编码通常需要随客户数二次增长的量子位，还会产生稠密罚项；即使成功映射到小型设备，路由SWAP和线路深度也足以淹没低能信号。把完整40客户问题直接交给量子机，在今天并不是有雄心，而是没有把硬件限制写进算法。</p>
+<p>DeepBlock选择另一条路线：让量子机进入一个它确实能影响、也能被独立考核的局部搜索位置。我们的判断不是“量子机能否替代OR-Tools”，而是以下三个递进问题：</p>
+<ol type="1">
+<li><strong>量子分布是否有信息？</strong>
+在同一QUBO上，真机是否比均匀随机更集中于预先规定的低能区域？</li>
+<li><strong>信息是否进入优化闭环？</strong>
+这些样本经过可行性修复与真实路线评价后，是否真的改变CVRP状态？</li>
+<li><strong>系统瓶颈在哪里？</strong>
+当前限制来自硬件噪声、代理目标错位，还是经典端只读取了太少的量子候选？</li>
+</ol>
+<p>这三个问题分别对应“量子性”“有效性”和“工程性”。只报告一个最优bitstring无法回答它们；只报告最终路线也无法区分量子采样、经典修复和接受规则的作用。因此，本文从一开始就把量子核证据与端到端证据拆开。</p>
+<figure>
+<img src="figures/fig02_evidence_ladder.png" style="width:84.0%"
+alt="四层证据阶梯。项目已经完成物理执行、分布级量子信号和闭环优化三层证据；端到端量子优势不是本文主张。" />
+<figcaption
+aria-hidden="true">四层证据阶梯。项目已经完成物理执行、分布级量子信号和闭环优化三层证据；端到端量子优势不是本文主张。</figcaption>
+</figure>
+<h2 id="本项目的四项技术贡献">1.1 本项目的四项技术贡献</h2>
+<p><strong>贡献一：把量子贡献写成可否证的统计命题。</strong>
+每个量子子问题的“高质量区”只由QUBO能量排序决定，不读取真机counts，也不依赖路线是否接受。若Baihua没有形成低能偏置，27.76%这一数值会退回10.16%附近，结论自然失败。</p>
+<p><strong>贡献二：从建模阶段消除路由开销。</strong>
+我们不是先构造稠密QUBO再让编译器补救，而是先选Baihua高保真物理链，再只保留链上直接耦合对应的二次项。正式任务使用物理量子位<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">[</mo><mn>41</mn><mo>,</mo><mn>28</mn><mo>,</mo><mn>29</mn><mo>,</mo><mn>30</mn><mo>,</mo><mn>17</mn><mo>,</mo><mn>16</mn><mo>,</mo><mn>15</mn><mo>,</mo><mn>14</mn><mo stretchy="false" form="postfix">]</mo></mrow><annotation encoding="application/x-tex">[41,28,29,30,17,16,15,14]</annotation></semantics></math>，36/36个真机线路不需要SWAP。</p>
+<p><strong>贡献三：让真机counts逐块改变后续问题。</strong>
+三个重叠DeepBlock采用<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>B</mi><mn>1</mn></msub><mo>→</mo><msub><mi>B</mi><mn>2</mn></msub><mo>→</mo><msub><mi>B</mi><mn>3</mn></msub><mo>→</mo><msub><mi>B</mi><mn>3</mn></msub><mo>→</mo><msub><mi>B</mi><mn>2</mn></msub><mo>→</mo><msub><mi>B</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">B_1\rightarrow B_2\rightarrow B_3\rightarrow B_3\rightarrow B_2\rightarrow B_1</annotation></semantics></math>双向扫描。前一块接受的客户分配会改变后一块的QUBO，因此36次硬件调用不是一次静态演示，而是hardware-in-the-loop状态演化。</p>
+<p><strong>贡献四：把失败信息变成工程结论。</strong>
+<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>在个别种子恢复更多精确余量，却没有稳定改善；相反，把<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>的候选预算从<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>8</mn></mrow><annotation encoding="application/x-tex">k=8</annotation></semantics></math>扩展到<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">k=64</annotation></semantics></math>，使种子2/3/4的真机平均路线改进从1.593增至3.475。现阶段最先该修的不是线路深度，而是量子代理与真实路线目标的对齐，以及如何使用长尾低频样本。</p>
+<h1 id="问题边界与混合分工">2. 问题、边界与混合分工</h1>
+<h2 id="cvrp与局部重分配">2.1 CVRP与局部重分配</h2>
+<p>设仓库为节点0，客户集合为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>V</mi><mo>=</mo><mo stretchy="false" form="prefix">{</mo><mn>1</mn><mo>,</mo><mi>…</mi><mo>,</mo><mi>n</mi><mo stretchy="false" form="postfix">}</mo></mrow><annotation encoding="application/x-tex">V=\{1,\ldots,n\}</annotation></semantics></math>，车辆集合为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>K</mi><mo>=</mo><mo stretchy="false" form="prefix">{</mo><mn>1</mn><mo>,</mo><mi>…</mi><mo>,</mo><mi>m</mi><mo stretchy="false" form="postfix">}</mo></mrow><annotation encoding="application/x-tex">K=\{1,\ldots,m\}</annotation></semantics></math>，客户需求为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>d</mi><mi>i</mi></msub><annotation encoding="application/x-tex">d_i</annotation></semantics></math>，车辆容量为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>Q</mi><annotation encoding="application/x-tex">Q</annotation></semantics></math>，节点间距离为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>c</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><annotation encoding="application/x-tex">c_{ij}</annotation></semantics></math>。完整CVRP的路线目标为</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mrow><mi mathvariant="normal">min</mi><mo>&#8289;</mo></mrow><munder><mo>∑</mo><mrow><mi>k</mi><mo>∈</mo><mi>K</mi></mrow></munder><munder><mo>∑</mo><mrow><mi>i</mi><mo>,</mo><mi>j</mi><mo>∈</mo><mi>V</mi><mo>∪</mo><mo stretchy="false" form="prefix">{</mo><mn>0</mn><mo stretchy="false" form="postfix">}</mo></mrow></munder><msub><mi>c</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>y</mi><mrow><mi>i</mi><mi>j</mi><mi>k</mi></mrow></msub><mo>,</mo></mrow><annotation encoding="application/x-tex">
+\min \sum_{k\in K}\sum_{i,j\in V\cup\{0\}} c_{ij}y_{ijk},
+</annotation></semantics></math></p>
+<p>其中<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>y</mi><mrow><mi>i</mi><mi>j</mi><mi>k</mi></mrow></msub><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">y_{ijk}=1</annotation></semantics></math>表示车辆<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math>从节点<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>i</mi><annotation encoding="application/x-tex">i</annotation></semantics></math>行驶到节点<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>j</mi><annotation encoding="application/x-tex">j</annotation></semantics></math>。完整模型还需满足一次访问、流守恒、容量和子回路消除约束。</p>
+<p>DeepBlock固定大部分当前解，只在一对相邻车辆<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>a</mi><mo>,</mo><mi>b</mi></mrow><annotation encoding="application/x-tex">a,b</annotation></semantics></math>之间重新分配局部客户块<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>B</mi><mo>=</mo><mo stretchy="false" form="prefix">{</mo><msub><mi>v</mi><mn>1</mn></msub><mo>,</mo><mi>…</mi><mo>,</mo><msub><mi>v</mi><mi>w</mi></msub><mo stretchy="false" form="postfix">}</mo></mrow><annotation encoding="application/x-tex">B=\{v_1,\ldots,v_w\}</annotation></semantics></math>，<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>w</mi><mo>≤</mo><mn>8</mn></mrow><annotation encoding="application/x-tex">w\le 8</annotation></semantics></math>。二进制变量<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>x</mi><mi>i</mi></msub><mo>=</mo><mn>0</mn></mrow><annotation encoding="application/x-tex">x_i=0</annotation></semantics></math>表示客户<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>v</mi><mi>i</mi></msub><annotation encoding="application/x-tex">v_i</annotation></semantics></math>属于车辆<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>a</mi><annotation encoding="application/x-tex">a</annotation></semantics></math>，<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>x</mi><mi>i</mi></msub><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">x_i=1</annotation></semantics></math>表示属于车辆<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>b</mi><annotation encoding="application/x-tex">b</annotation></semantics></math>。量子端优化的是稀疏代理能量</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>E</mi><mi>Q</mi></msub><mo stretchy="false" form="prefix">(</mo><mi mathvariant="bold-italic">𝒙</mi><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mi>c</mi><mo>+</mo><munderover><mo>∑</mo><mrow><mi>i</mi><mo>=</mo><mn>1</mn></mrow><mi>w</mi></munderover><msub><mi>h</mi><mi>i</mi></msub><msub><mi>x</mi><mi>i</mi></msub><mo>+</mo><munder><mo>∑</mo><mrow><mo stretchy="false" form="prefix">(</mo><mi>i</mi><mo>,</mo><mi>j</mi><mo stretchy="false" form="postfix">)</mo><mo>∈</mo><msub><mi mathvariant="script">ℰ</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">h</mi><mi mathvariant="normal">y</mi></mrow></msub></mrow></munder><msub><mi>J</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><msub><mi>x</mi><mi>i</mi></msub><msub><mi>x</mi><mi>j</mi></msub><mo>,</mo></mrow><annotation encoding="application/x-tex">
+E_Q(\mathbf{x})=c+\sum_{i=1}^{w}h_i x_i+\sum_{(i,j)\in\mathcal{E}_{\mathrm{phy}}}J_{ij}x_i x_j,
+</annotation></semantics></math></p>
+<p>其中<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi mathvariant="script">ℰ</mi><mrow><mi mathvariant="normal">p</mi><mi mathvariant="normal">h</mi><mi mathvariant="normal">y</mi></mrow></msub><annotation encoding="application/x-tex">\mathcal{E}_{\mathrm{phy}}</annotation></semantics></math>不是任意完全图，而是选定物理链支持的逻辑边集合。线性项综合边界几何和负载变化，二次项表示客户共同移动的相互作用。代理能量用于塑造采样分布，最终接受仍以完整CVRP路线距离为准。</p>
+<h2 id="为什么必须保留经典端">2.2 为什么必须保留经典端</h2>
+<p>量子核输出的是局部二进制重分配，不直接承诺容量可行，也不直接包含完整访问顺序。若把容量修复和路径重建隐藏在“量子算法”内部，任何路线改善都无法归因。因此我们明确划分职责：</p>
+<table>
+<thead>
+<tr>
+<th>环节</th>
+<th style="text-align: center;">量子端</th>
+<th style="text-align: center;">经典端</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>低能局部分配候选生成</td>
+<td style="text-align: center;">是</td>
+<td style="text-align: center;">随机/模拟/精确对照</td>
+</tr>
+<tr>
+<td>容量约束检查与确定性修复</td>
+<td style="text-align: center;">否</td>
+<td style="text-align: center;">是</td>
+</tr>
+<tr>
+<td>路线重建与2-opt</td>
+<td style="text-align: center;">否</td>
+<td style="text-align: center;">是</td>
+</tr>
+<tr>
+<td>完整距离目标计算</td>
+<td style="text-align: center;">否</td>
+<td style="text-align: center;">是</td>
+</tr>
+<tr>
+<td>严格改善接受与状态更新</td>
+<td style="text-align: center;">否</td>
+<td style="text-align: center;">是</td>
+</tr>
+<tr>
+<td>QUBO低能区域质量判定</td>
+<td style="text-align: center;">提供counts</td>
+<td style="text-align: center;">精确枚举并统计</td>
+</tr>
+</tbody>
+</table>
+<p>这种分工并不削弱量子部分，反而给它划出清晰的责任边界：量子机必须把更多概率质量推入QUBO低能区域；经典端必须保证系统永远输出合法路线。</p>
+<h1 id="deepblock拓扑共设计">3. DeepBlock拓扑共设计</h1>
+<h2 id="从40客户到三个8比特量子核">3.1 从40客户到三个8比特量子核</h2>
+<p>初始路线由容量约束聚类、最近邻和两轮2-opt构造。算法按路线间几何邻近度选择一对车辆，再从两条路线的边界选出最多16位客户。边界客户并不是随机截取，而是根据其到两条路线的相对距离、局部邻域与车辆负载平衡排序。</p>
+<p>16位客户被组织为三个宽度不超过8的局部块，相邻块默认重叠3位客户。重叠的作用类似经典大邻域搜索中的交叠邻域：一个块接受的移动，可以在下一块被再次协调；反向扫描则消除固定顺序偏差。块宽不足8时自然退化，不添加虚拟量子位。</p>
+<h2 id="物理链先于qubo">3.2 物理链先于QUBO</h2>
+<p>正式批次从2026-08-01 12:43:01的校准快照选择链</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>41</mn><mo>−</mo><mn>28</mn><mo>−</mo><mn>29</mn><mo>−</mo><mn>30</mn><mo>−</mo><mn>17</mn><mo>−</mo><mn>16</mn><mo>−</mo><mn>15</mn><mo>−</mo><mn>14</mn><mi>.</mi></mrow><annotation encoding="application/x-tex">
+41-28-29-30-17-16-15-14.
+</annotation></semantics></math></p>
+<p>七条耦合边保真度依次为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>0.987</mn><mo>,</mo><mn>0.995</mn><mo>,</mo><mn>0.986</mn><mo>,</mo><mn>0.985</mn><mo>,</mo><mn>0.985</mn><mo>,</mo><mn>0.982</mn><mo>,</mo><mn>0.994</mn></mrow><annotation encoding="application/x-tex">0.987,0.995,0.986,0.985,0.985,0.982,0.994</annotation></semantics></math>。逻辑变量<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>x</mi><mn>0</mn></msub><mo>,</mo><mi>…</mi><mo>,</mo><msub><mi>x</mi><mn>7</mn></msub></mrow><annotation encoding="application/x-tex">x_0,\ldots,x_7</annotation></semantics></math>顺序放置在该链上，只有链边对应的<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>J</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub><annotation encoding="application/x-tex">J_{ij}</annotation></semantics></math>被保留；被剪枝的二次项及原因写入逐任务日志。这样做牺牲了代理模型的部分稠密表达能力，却换来确定的零SWAP线路和可审计的物理意义。</p>
+<figure>
+<img src="figures/fig03_topology_codesign.png" style="width:94.0%"
+alt="逻辑变量、Baihua物理量子位链和p=1线路结构。QUBO只保留物理链直接支持的二次项。" />
+<figcaption
+aria-hidden="true">逻辑变量、Baihua物理量子位链和<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>线路结构。QUBO只保留物理链直接支持的二次项。</figcaption>
+</figure>
+<h2 id="qaoa与参数迁移">3.3 QAOA与参数迁移</h2>
+<p>深度<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>p</mi><annotation encoding="application/x-tex">p</annotation></semantics></math>的QAOA态为</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">|</mo><mi mathvariant="bold-italic">𝜸</mi><mo>,</mo><mi mathvariant="bold-italic">𝜷</mi><mo stretchy="false" form="postfix">⟩</mo><mo>=</mo><munderover><mo>∏</mo><mrow><mi>ℓ</mi><mo>=</mo><mn>1</mn></mrow><mi>p</mi></munderover><msup><mi>e</mi><mrow><mi>−</mi><mi>i</mi><msub><mi>β</mi><mi>ℓ</mi></msub><msub><mi>H</mi><mi>M</mi></msub></mrow></msup><msup><mi>e</mi><mrow><mi>−</mi><mi>i</mi><msub><mi>γ</mi><mi>ℓ</mi></msub><msub><mi>H</mi><mi>C</mi></msub></mrow></msup><mo stretchy="false" form="prefix">|</mo><mi>+</mi><msup><mo stretchy="false" form="postfix">⟩</mo><mrow><mi>⊗</mi><mi>w</mi></mrow></msup><mo>,</mo></mrow><annotation encoding="application/x-tex">
+|\boldsymbol{\gamma},\boldsymbol{\beta}\rangle=
+\prod_{\ell=1}^{p}e^{-i\beta_\ell H_M}e^{-i\gamma_\ell H_C}|+\rangle^{\otimes w},
+</annotation></semantics></math></p>
+<p>其中<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>H</mi><mi>C</mi></msub><annotation encoding="application/x-tex">H_C</annotation></semantics></math>由稀疏QUBO映射得到，<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>H</mi><mi>M</mi></msub><mo>=</mo><msub><mo>∑</mo><mi>i</mi></msub><msub><mi>X</mi><mi>i</mi></msub></mrow><annotation encoding="application/x-tex">H_M=\sum_i X_i</annotation></semantics></math>。参数先在理想状态向量上进行确定性坐标搜索，并在相邻块之间迁移。正式配置选择<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>，原因不是“浅线路一定更优”，而是深度门控结果表明<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>尚未产生稳定增益，继续提交<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>3</mn></mrow><annotation encoding="application/x-tex">p=3</annotation></semantics></math>会消耗硬件额度却没有正向趋势支撑。</p>
+<h2 id="从counts到可行路线">3.4 从counts到可行路线</h2>
+<p>每个真机任务返回4,096
+shots。在线解码按频次读取前<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">k=64</annotation></semantics></math>个不同bitstring，对每个候选执行：</p>
+<ol type="1">
+<li>解码为两辆车之间的局部客户分配；</li>
+<li>若容量超限，按固定规则移动边际代价最小的客户完成修复；</li>
+<li>重建两条受影响路线并进行相同预算的2-opt；</li>
+<li>计算完整CVRP总距离；</li>
+<li>仅当距离严格下降时更新当前状态。</li>
+</ol>
+<p>这一接受规则保证混合系统单调不劣。候选频率只决定评价顺序，不替代真实路线目标。</p>
+<h1 id="独立量子候选质量门槛">4. 独立量子候选质量门槛</h1>
+<h2 id="门槛如何定义">4.1 门槛如何定义</h2>
+<p>对每个宽度<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>w</mi><mo>=</mo><mn>8</mn></mrow><annotation encoding="application/x-tex">w=8</annotation></semantics></math>的QUBO，完整枚举<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msup><mn>2</mn><mn>8</mn></msup><mo>=</mo><mn>256</mn></mrow><annotation encoding="application/x-tex">2^8=256</annotation></semantics></math>个状态。按<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><msub><mi>E</mi><mi>Q</mi></msub><mo stretchy="false" form="prefix">(</mo><mi mathvariant="bold-italic">𝒙</mi><mo stretchy="false" form="postfix">)</mo><mo>,</mo><mi mathvariant="bold-italic">𝒙</mi><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">(E_Q(\mathbf{x}),\mathbf{x})</annotation></semantics></math>稳定排序，固定前</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>q</mi><mo>=</mo><mo stretchy="false" form="prefix">⌈</mo><mn>0.10</mn><mo>×</mo><mn>256</mn><mo stretchy="false" form="postfix">⌉</mo><mo>=</mo><mn>26</mn></mrow><annotation encoding="application/x-tex">
+q=\lceil 0.10\times 256\rceil=26
+</annotation></semantics></math></p>
+<p>个状态为高质量集合<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msub><mi>G</mi><mn>0.1</mn></msub><annotation encoding="application/x-tex">G_{0.1}</annotation></semantics></math>。该集合在数学上由QUBO确定；它不读取真机counts、不读取路线改善，也不读取top-<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>k</mi><annotation encoding="application/x-tex">k</annotation></semantics></math>接受结果。</p>
+<p>真机在高质量区的概率质量为</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>P</mi><mrow><mi mathvariant="normal">H</mi><mi mathvariant="normal">W</mi></mrow></msub><mo stretchy="false" form="prefix">(</mo><msub><mi>G</mi><mn>0.1</mn></msub><mo stretchy="false" form="postfix">)</mo><mo>=</mo><munder><mo>∑</mo><mrow><mi mathvariant="bold-italic">𝒙</mi><mo>∈</mo><msub><mi>G</mi><mn>0.1</mn></msub></mrow></munder><mfrac><mrow><msub><mi>N</mi><mrow><mi mathvariant="normal">H</mi><mi mathvariant="normal">W</mi></mrow></msub><mo stretchy="false" form="prefix">(</mo><mi mathvariant="bold-italic">𝒙</mi><mo stretchy="false" form="postfix">)</mo></mrow><mn>4096</mn></mfrac><mi>.</mi></mrow><annotation encoding="application/x-tex">
+P_{\mathrm{HW}}(G_{0.1})=
+\sum_{\mathbf{x}\in G_{0.1}}\frac{N_{\mathrm{HW}}(\mathbf{x})}{4096}.
+</annotation></semantics></math></p>
+<p>同一状态空间上的均匀随机基线为</p>
+<p><math display="block" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>P</mi><mi>U</mi></msub><mo stretchy="false" form="prefix">(</mo><msub><mi>G</mi><mn>0.1</mn></msub><mo stretchy="false" form="postfix">)</mo><mo>=</mo><mfrac><mn>26</mn><mn>256</mn></mfrac><mo>=</mo><mn>10.15625</mn><mi>%</mi><mi>.</mi></mrow><annotation encoding="application/x-tex">
+P_U(G_{0.1})=\frac{26}{256}=10.15625\%.
+</annotation></semantics></math></p>
+<p>因此，富集倍数<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>R</mi><mo>=</mo><msub><mi>P</mi><mrow><mi mathvariant="normal">H</mi><mi mathvariant="normal">W</mi></mrow></msub><mi>/</mi><msub><mi>P</mi><mi>U</mi></msub></mrow><annotation encoding="application/x-tex">R=P_{\mathrm{HW}}/P_U</annotation></semantics></math>回答一个直接问题：从真机随机抽取一个shot，它落入预定义低能区域的概率，是没有任何量子低能偏置时的多少倍。</p>
+<h2 id="统计单位与判定规则">4.2 统计单位与判定规则</h2>
+<p>一个种子内部包含6个相关局部块，4,096个shots也来自同一线路，因此它们都不能被当成独立样本。正式统计单位是6个独立CVRP种子。我们报告种子均值、20,000次种子bootstrap区间，以及遍历<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><msup><mn>2</mn><mn>6</mn></msup><annotation encoding="application/x-tex">2^6</annotation></semantics></math>种符号组合的双侧精确符号翻转检验。</p>
+<p>量子候选质量的判定规则为：硬件相对均匀随机的低能概率质量差，其95%种子bootstrap区间下界大于0，且双侧精确<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>&lt;</mo><mn>0.05</mn></mrow><annotation encoding="application/x-tex">p&lt;0.05</annotation></semantics></math>。路线改善只作为下游结果，不参与这一门槛。</p>
+<p>需要说明的是，这一10%门槛是在首批数据采集完成后根据评审建议引入，当前结果应视为探索性证据。门槛、统计单位和决策规则已经冻结，后续新批次可以完成真正的确认性检验。论文没有把这一时间顺序藏在脚注里，因为半决赛评审更需要可复核的证据链，而不是一个事后包装得过于完美的故事。</p>
+<h1 id="实验设计">5. 实验设计</h1>
+<h2 id="实例与正式批次">5.1 实例与正式批次</h2>
+<p>实例为确定性二维欧氏CVRP，每个实例40位客户、4辆同容量车辆。种子1至10先进行局部精确余量筛查，其中种子2、3、4、7、9、10存在严格局部改善空间，被纳入正式真机集；其余4个种子没有当前DeepBlock可恢复的余量。这个筛选避免在“不存在改善答案”的局部问题上消耗真机额度，但也意味着6/6正向实例不能外推为任意CVRP实例的成功率，因此论文同时公开40%的无余量比例。</p>
+<table>
+<thead>
+<tr>
+<th>项目</th>
+<th style="text-align: right;">正式配置</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>客户数 / 车辆数</td>
+<td style="text-align: right;">40 / 4</td>
+</tr>
+<tr>
+<td>边界池 / 块宽 / 重叠</td>
+<td style="text-align: right;">16 / 8 / 3</td>
+</tr>
+<tr>
+<td>扫描</td>
+<td
+style="text-align: right;"><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>B</mi><mn>1</mn></msub><mo>→</mo><msub><mi>B</mi><mn>2</mn></msub><mo>→</mo><msub><mi>B</mi><mn>3</mn></msub><mo>→</mo><msub><mi>B</mi><mn>3</mn></msub><mo>→</mo><msub><mi>B</mi><mn>2</mn></msub><mo>→</mo><msub><mi>B</mi><mn>1</mn></msub></mrow><annotation encoding="application/x-tex">B_1\to B_2\to B_3\to B_3\to B_2\to B_1</annotation></semantics></math></td>
+</tr>
+<tr>
+<td>QAOA深度</td>
+<td
+style="text-align: right;"><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math></td>
+</tr>
+<tr>
+<td>每任务shots</td>
+<td style="text-align: right;">4,096</td>
+</tr>
+<tr>
+<td>在线候选预算</td>
+<td
+style="text-align: right;"><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">k=64</annotation></semantics></math></td>
+</tr>
+<tr>
+<td>正式种子</td>
+<td style="text-align: right;">2, 3, 4, 7, 9, 10</td>
+</tr>
+<tr>
+<td>Baihua任务数</td>
+<td style="text-align: right;">36</td>
+</tr>
+<tr>
+<td>总shots</td>
+<td style="text-align: right;">147,456</td>
+</tr>
+</tbody>
+</table>
+<h2 id="四个配对对照臂">5.2 四个配对对照臂</h2>
+<table>
+<thead>
+<tr>
+<th>对照臂</th>
+<th>候选来源</th>
+<th style="text-align: right;">状态预算</th>
+<th>作用</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>uniform/random</td>
+<td>8比特均匀随机</td>
+<td style="text-align: right;">4,096</td>
+<td>反事实无量子偏置基线</td>
+</tr>
+<tr>
+<td>ideal</td>
+<td>同一QAOA的理想状态向量</td>
+<td style="text-align: right;">4,096</td>
+<td>估计无噪声可达分布</td>
+</tr>
+<tr>
+<td>Baihua</td>
+<td>超导真机counts</td>
+<td style="text-align: right;">4,096</td>
+<td>正式量子核</td>
+</tr>
+<tr>
+<td>exact</td>
+<td>256状态完整枚举</td>
+<td style="text-align: right;">256</td>
+<td>测量局部可恢复余量</td>
+</tr>
+</tbody>
+</table>
+<p>随机、理想和Baihua臂使用相同的候选预算、容量修复、路线构造与严格接受。由于不同臂接受的移动不同，后续QUBO也不同；端到端比较以整条独立闭环为单位，不能把轨迹后半段的子问题误写成同一QUBO上的逐块配对。</p>
+<h1 id="结果先回答量子核再回答优化系统">6.
+结果：先回答量子核，再回答优化系统</h1>
+<h2 id="真机低能信号">6.1 真机低能信号</h2>
+<figure>
+<img src="figures/fig04_seed_enrichment.png" style="width:96.0%"
+alt="每个独立种子的最低10%能量区域概率质量。六个种子的Baihua结果都高于10.16%的均匀随机线。" />
+<figcaption
+aria-hidden="true">每个独立种子的最低10%能量区域概率质量。六个种子的Baihua结果都高于10.16%的均匀随机线。</figcaption>
+</figure>
+<p>六个种子的Baihua低能概率质量分别为20.79%、14.02%、34.14%、30.26%、35.56%和31.80%，全部高于10.16%的均匀随机基线；平均值为27.76%。理想QAOA均值为39.18%。主结果如下：</p>
+<table>
+<thead>
+<tr>
+<th>指标</th>
+<th style="text-align: right;">数值</th>
+<th>解释</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>真机低能概率质量</td>
+<td style="text-align: right;">27.76%</td>
+<td>每个shot落入预定义高质量区的概率</td>
+</tr>
+<tr>
+<td>均匀随机概率质量</td>
+<td style="text-align: right;">10.16%</td>
+<td><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>26</mn><mi>/</mi><mn>256</mn></mrow><annotation encoding="application/x-tex">26/256</annotation></semantics></math>，同一QUBO反事实基线</td>
+</tr>
+<tr>
+<td>真机富集倍数</td>
+<td style="text-align: right;">2.73x</td>
+<td><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mn>27.76</mn><mi>/</mi><mn>10.16</mn></mrow><annotation encoding="application/x-tex">27.76/10.16</annotation></semantics></math></td>
+</tr>
+<tr>
+<td>真机额外概率质量</td>
+<td style="text-align: right;">+17.60 pp</td>
+<td>比均匀随机多出的绝对概率</td>
+</tr>
+<tr>
+<td>理想QAOA概率质量</td>
+<td style="text-align: right;">39.18%</td>
+<td>无噪声上界参考</td>
+</tr>
+<tr>
+<td>理想超随机部分保留率</td>
+<td style="text-align: right;">60.6%</td>
+<td><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mo stretchy="false" form="prefix">(</mo><mn>27.76</mn><mo>−</mo><mn>10.16</mn><mo stretchy="false" form="postfix">)</mo><mi>/</mi><mo stretchy="false" form="prefix">(</mo><mn>39.18</mn><mo>−</mo><mn>10.16</mn><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">(27.76-10.16)/(39.18-10.16)</annotation></semantics></math></td>
+</tr>
+<tr>
+<td>种子方向</td>
+<td style="text-align: right;">6/6为正</td>
+<td>每个种子均高于随机</td>
+</tr>
+<tr>
+<td>精确符号翻转检验</td>
+<td
+style="text-align: right;"><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>0.03125</mn></mrow><annotation encoding="application/x-tex">p=0.03125</annotation></semantics></math></td>
+<td><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>n</mi><mo>=</mo><mn>6</mn></mrow><annotation encoding="application/x-tex">n=6</annotation></semantics></math>可达到的最小双侧<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mi>p</mi><annotation encoding="application/x-tex">p</annotation></semantics></math>值</td>
+</tr>
+</tbody>
+</table>
+<p>这组数据给出了本项目最清晰的量子作用：若把Baihua
+counts替换为均匀随机，同一个低能门槛下的期望质量只有10.16%；真实硬件将其推到27.76%。它不是“能量降低2.73倍”，也不是“路线缩短2.73倍”，而是候选分布的低能富集。</p>
+<h2 id="量子信号进入cvrp闭环">6.2 量子信号进入CVRP闭环</h2>
+<figure>
+<img src="figures/fig05_end_to_end.png" style="width:96.0%"
+alt="六个种子的可用局部精确余量，以及Baihua、随机和理想采样实际恢复的路线距离。" />
+<figcaption
+aria-hidden="true">六个种子的可用局部精确余量，以及Baihua、随机和理想采样实际恢复的路线距离。</figcaption>
+</figure>
+<p>Baihua在6/6个正式实例上产生严格路线改善，平均距离下降2.555，平均恢复71.4%的局部精确余量。逐种子结果表明，真机并非只在单个“幸运实例”上起作用：种子3和10达到100%余量恢复，种子4恢复92.9%。</p>
+<p>端到端绝对平均改善方面，均匀随机、理想模拟和局部精确枚举分别为2.757、2.888和3.653；Baihua与随机为3胜3负，配对差异<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>0.65625</mn></mrow><annotation encoding="application/x-tex">p=0.65625</annotation></semantics></math>。这个结果不用于否定量子核，因为两项指标回答不同问题：低能门槛考察真机是否优化了它被赋予的QUBO；路线距离考察该QUBO是否准确代理了完整CVRP目标。前者显著、后者未拉开，说明瓶颈已经从“量子机有没有低能信号”转移到“代理目标能否正确排序真实路线候选”。</p>
+<h2 id="候选预算比继续加深更重要">6.3 候选预算比继续加深更重要</h2>
+<figure>
+<img src="figures/fig06_candidate_budget.png" style="width:90.0%"
+alt="固定已有counts的候选预算诊断。较低频候选中仍包含大量能改善真实路线的状态。" />
+<figcaption
+aria-hidden="true">固定已有counts的候选预算诊断。较低频候选中仍包含大量能改善真实路线的状态。</figcaption>
+</figure>
+<p>在<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>的24个历史硬件子问题中，只评价最高频的8个候选时，包含改善状态的子问题比例为12.5%；<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>16</mn><mo>,</mo><mn>32</mn><mo>,</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">k=16,32,64</annotation></semantics></math>时分别为29.2%、33.3%和37.5%；评价全部已采样状态可达到58.3%。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>的全量诊断达到70.8%，却没有在<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>k</mi><mo>=</mo><mn>8</mn></mrow><annotation encoding="application/x-tex">k=8</annotation></semantics></math>时形成稳定端到端收益。</p>
+<p>种子2/3/4的闭环复算进一步给出直接干预证据：保持<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>和原始counts不变，只把在线候选预算从8提高到64，平均路线改善由1.593增至3.475，增幅118%。同一批种子把线路从<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>加深到<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>并没有获得类似的稳定提升。对半决赛工程方案而言，这意味着有限额度应优先用于跨日确认性重复和代理校准，而不是盲目追求更深线路。</p>
+<h2 id="十种子消融与失败深度">6.4 十种子消融与失败深度</h2>
+<figure>
+<img src="figures/fig07_ablation.png" style="width:92.0%"
+alt="十个配对种子的配置筛选。p=1,k=64获得最高模拟平均改善；更深线路并未形成稳定优势。" />
+<figcaption
+aria-hidden="true">十个配对种子的配置筛选。<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn><mo>,</mo><mi>k</mi><mo>=</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">p=1,k=64</annotation></semantics></math>获得最高模拟平均改善；更深线路并未形成稳定优势。</figcaption>
+</figure>
+<p><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn><mo>,</mo><mi>k</mi><mo>=</mo><mn>16</mn></mrow><annotation encoding="application/x-tex">p=1,k=16</annotation></semantics></math>和<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn><mo>,</mo><mi>k</mi><mo>=</mo><mn>64</mn></mrow><annotation encoding="application/x-tex">p=1,k=64</annotation></semantics></math>在十种子配对消融中超过相同预算的随机臂；<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn><mo>,</mo><mi>k</mi><mo>=</mo><mn>32</mn></mrow><annotation encoding="application/x-tex">p=1,k=32</annotation></semantics></math>出现轨迹非单调，说明闭环接受会改变后续邻域，候选预算并非简单单调参数。移除3客户重叠后，模拟平均改善从1.321降至1.187；只做正向扫描时为1.226，说明重叠和双向扫描提供了结构价值。</p>
+<p><math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>在种子3上恢复约89.3%的精确余量并超过随机与理想模拟，但种子2和4退化。按照预先使用的“<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>未稳定优于<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>”门控，项目没有继续提交<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>3</mn></mrow><annotation encoding="application/x-tex">p=3</annotation></semantics></math>任务。这个停止决定保留在论文中，因为它展示了算法选择由数据门控，而不是由“深线路看起来更量子”驱动。</p>
+<h1 id="为什么这项工作适合量子优化赛道">7.
+为什么这项工作适合“量子+优化”赛道</h1>
+<h2 id="量子不是装饰性调用">7.1 量子不是装饰性调用</h2>
+<p>如果量子模块只是把随机bitstring交给经典修复，低能区域的概率质量应接近10.16%。正式结果为27.76%，并且6个种子全部为正。这个差异在不执行容量修复、不构造路线、不读取接受结果时已经存在，所以不能由经典后处理制造。</p>
+<p>进一步地，量子counts处在逐块状态转移的因果链上：被接受的bitstring改变客户归属，更新后的路线又决定下一个边界块和QUBO。删除量子模块并用均匀随机替代，会同时改变候选分布和后续轨迹。这是一个真正的混合优化系统，而不是在经典答案生成后附加一段量子线路。</p>
+<h2 id="物理拓扑进入了优化模型">7.2 物理拓扑进入了优化模型</h2>
+<p>许多QAOA项目把映射当作编译器的末端工作。DeepBlock把拓扑提前到QUBO构造：硬件链决定允许的二次项，校准保真度决定物理子图，0
+SWAP不是一次幸运编译，而是模型结构的直接结果。这种“问题-线路-硬件”共设计是本项目最容易迁移到更大设备的部分：未来可将单链替换为树、格或多个链块，而不改变经典主框架。</p>
+<h2 id="证据比单张最优路线更完整">7.3 证据比单张最优路线更完整</h2>
+<figure>
+<img src="figures/fig08_reproducibility_chain.png" style="width:94.0%"
+alt="从校准、线路、云端任务到统计判定的证据链。所有关键变换都可由归档工件离线重建。" />
+<figcaption
+aria-hidden="true">从校准、线路、云端任务到统计判定的证据链。所有关键变换都可由归档工件离线重建。</figcaption>
+</figure>
+<p>每个真机子问题保存以下工件：校准时间和量子位指标、逻辑QASM、物理QASM、物理量子位与耦合映射、任务ID、原始counts、QAOA参数、代理QUBO、候选容量修复、真实距离评价、接受前后客户分配。四个实验臂共形成144条重放记录，144/144通过bitstring解释、best-of-shots和状态转移一致性检查。</p>
+<p>这条证据链能让评委区分三件经常混在一起的事：线路是否提交成功、counts是否真的来自硬件、counts是否改变了优化状态。可复现性在这里不是附录装饰，而是量子贡献能够被相信的前提。</p>
+<h1 id="当前短板与半决赛后的决定性实验">8.
+当前短板与半决赛后的决定性实验</h1>
+<h2 id="真正的短板是代理目标错位">8.1 真正的短板是代理目标错位</h2>
+<p>历史硬件子问题中，QUBO能量与真实路线距离的Spearman相关系数接近0（<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>1</mn></mrow><annotation encoding="application/x-tex">p=1</annotation></semantics></math>约为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>−</mi><mn>0.025</mn></mrow><annotation encoding="application/x-tex">-0.025</annotation></semantics></math>，<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>=</mo><mn>2</mn></mrow><annotation encoding="application/x-tex">p=2</annotation></semantics></math>约为<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>−</mi><mn>0.038</mn></mrow><annotation encoding="application/x-tex">-0.038</annotation></semantics></math>）。这解释了为什么量子机明显富集QUBO低能态，却尚未在端到端路线指标上拉开随机基线。量子机正在完成它收到的任务，问题在于代理任务还没有稳定表达真实CVRP增量。</p>
+<p>下一阶段不应继续堆罚项，而应使用真实路线增量监督代理系数。具体方案是：在训练种子上枚举8比特局部状态，得到<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>L</mi><mo stretchy="false" form="prefix">(</mo><mi mathvariant="bold-italic">𝒙</mi><mo stretchy="false" form="postfix">)</mo></mrow><annotation encoding="application/x-tex">\Delta L(\mathbf{x})</annotation></semantics></math>；以排序损失或岭回归拟合<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><msub><mi>h</mi><mi>i</mi></msub><mo>,</mo><msub><mi>J</mi><mrow><mi>i</mi><mi>j</mi></mrow></msub></mrow><annotation encoding="application/x-tex">h_i,J_{ij}</annotation></semantics></math>，同时加入物理边稀疏约束；冻结代理后在独立种子上检验能量与<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi mathvariant="normal">Δ</mi><mi>L</mi></mrow><annotation encoding="application/x-tex">\Delta L</annotation></semantics></math>的秩相关，并比较相同完整目标评价预算下的sample
+efficiency。只有代理相关性先过门槛，量子低能富集才有机会稳定转化为路线优势。</p>
+<h2 id="需要确认性而非重复利用旧数据">8.2
+需要确认性而非重复利用旧数据</h2>
+<p>最低10%能量门槛已经冻结。半决赛后最有价值的新真机批次应满足：不少于30个预注册种子，包含有余量和无余量实例；跨3至5个校准日期；同一QUBO分别执行Baihua、均匀随机和理想模拟；主统计仍以种子为单位；不在看到counts后修改10%阈值。若硬件减随机的95%bootstrap下界仍大于0且精确<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>&lt;</mo><mn>0.05</mn></mrow><annotation encoding="application/x-tex">p&lt;0.05</annotation></semantics></math>，探索性结果即可升级为确认性证据。</p>
+<h2 id="规模扩展不能靠8比特枚举">8.3 规模扩展不能靠8比特枚举</h2>
+<p>当前每个量子核只有8个真实决策位，256个状态可被经典枚举，因此不能声称计算复杂度优势。扩展路线是把DeepBlock从单链8位升级到14至20位的树状或多链物理子图，并用分支限界、禁忌搜索和重要性随机作为同预算基线。届时评测重点应从“是否找到最优”转为固定时间或固定完整目标调用次数下的最优差距、成功率和尾部风险。</p>
+<h1 id="结论">9. 结论</h1>
+<p>DeepBlock给出的不是一条被量子术语包装的经典路线，而是一套能够指出量子处理器具体贡献位置的混合优化实验。Baihua在36个正式任务中完成147,456
+shots，全部0 SWAP；在不借助路线接受结果的独立门槛下，真机将最低10%
+QUBO能量区域的概率质量从均匀随机的10.16%提高到27.76%，形成2.73倍富集，6/6个种子方向一致。该分布信号进入容量修复、真实路线评价和单调接受组成的闭环，在6/6个有余量实例上产生路线改善，并恢复71.4%的局部精确余量。</p>
+<p>这项工作当前最重要的科学判断也很明确：硬件已经产生可测的优化偏置，端到端上限却由代理QUBO与真实CVRP距离的错位决定。比继续加深线路更有效的动作，是学习一个能排序真实路线增量的拓扑稀疏代理，并用冻结阈值开展跨日确认性真机实验。对于“量子+优化”赛道，这种把正结果、失败边界和下一步决定性实验放在同一证据链中的方案，比单独展示一次最优采样更接近可迁移、可审计的量子优化工程。</p>
+<h1 id="参考文献">参考文献</h1>
+<ol type="1">
+<li>Dantzig G B, Ramser J H. The Truck Dispatching Problem.
+<em>Management Science</em>, 1959, 6(1): 80-91. DOI:
+10.1287/mnsc.6.1.80.</li>
+<li>Laporte G. Fifty Years of Vehicle Routing. <em>Transportation
+Science</em>, 2009, 43(4): 408-416. DOI: 10.1287/trsc.1090.0301.</li>
+<li>Preskill J. Quantum Computing in the NISQ Era and Beyond.
+<em>Quantum</em>, 2018, 2: 79. DOI: 10.22331/q-2018-08-06-79.</li>
+<li>Glover F, Kochenberger G, Du Y. Quantum Bridge Analytics I: A
+Tutorial on Formulating and Using QUBO Models. <em>4OR</em>, 2019, 17:
+335-371. DOI: 10.1007/s10288-019-00424-y.</li>
+<li>Lucas A. Ising Formulations of Many NP Problems. <em>Frontiers in
+Physics</em>, 2014, 2: 5. DOI: 10.3389/fphy.2014.00005.</li>
+<li>Farhi E, Goldstone J, Gutmann S. A Quantum Approximate Optimization
+Algorithm. arXiv:1411.4028, 2014.</li>
+<li>Hadfield S, Wang Z, O’Gorman B, et al. From the Quantum Approximate
+Optimization Algorithm to a Quantum Alternating Operator Ansatz.
+<em>Algorithms</em>, 2019, 12(2): 34. DOI: 10.3390/a12020034.</li>
+<li>Zhou L, Wang S T, Choi S, et al. Quantum Approximate Optimization
+Algorithm: Performance, Mechanism, and Implementation on Near-Term
+Devices. <em>Physical Review X</em>, 2020, 10: 021067.</li>
+<li>Cerezo M, Arrasmith A, Babbush R, et al. Variational Quantum
+Algorithms. <em>Nature Reviews Physics</em>, 2021, 3: 625-644.</li>
+<li>Xu H Z, Zhuang W F, Wang Z A, et al. Quafu-Qcover: Explore
+Combinatorial Optimization Problems on Cloud-Based Quantum Computers.
+<em>Chinese Physics B</em>, 2024, 33(5): 050302.</li>
+<li>Feld S, Roch C, Gabor T, et al. A Hybrid Solution Method for the
+Capacitated Vehicle Routing Problem Using a Quantum Annealer.
+<em>Frontiers in ICT</em>, 2019, 6: 13.</li>
+<li>Harwood S, Gambella C, Trenev D, et al. Formulating and Solving
+Routing Problems on Quantum Computers. <em>IEEE Transactions on Quantum
+Engineering</em>, 2021, 2: 3100118.</li>
+<li>Azad U, Behera B K, Ahmed E A, et al. Solving Vehicle Routing
+Problem Using Quantum Approximate Optimization Algorithm. <em>IEEE
+Transactions on Intelligent Transportation Systems</em>, 2023, 24:
+7564-7573.</li>
+<li>Fitzek D, Ghandriz T, Laine L, et al. Applying Quantum Approximate
+Optimization to the Heterogeneous Vehicle Routing Problem.
+<em>Scientific Reports</em>, 2024, 14: 25415.</li>
+<li>Xie N, Lee X, Cai D, et al. A Feasibility-Preserved Quantum
+Approximate Solver for the Capacitated Vehicle Routing Problem.
+arXiv:2308.08785, 2023.</li>
+<li>Huang W H, Matsuyama H, Yamashiro Y. Solving Capacitated Vehicle
+Routing Problem with Quantum Alternating Operator Ansatz and Column
+Generation. arXiv:2503.17051, 2025.</li>
+</ol>
+<h1 id="附录a结果与复现目录">附录A：结果与复现目录</h1>
+<ul>
+<li>正式真机批次：<code>results/baihua_hardware_p1_k64_seeds2_3_4_20260801</code>；</li>
+<li>正式真机批次：<code>results/baihua_hardware_p1_k64_seeds7_9_10_20260801</code>；</li>
+<li>候选质量证据：<code>results/baihua_quantum_candidate_quality_20260801</code>；</li>
+<li>半决赛汇总包：<code>results/baihua_competition_package_20260801</code>；</li>
+<li>六种子四臂结果：<code>formal_seed_results.csv</code>；</li>
+<li>冻结确认协议：<code>frozen_confirmatory_protocol.json</code>；</li>
+<li>论文图表均由归档CSV/JSON重建，不会提交新的云端任务。</li>
+</ul>
+<h1 id="附录b冻结确认性判定">附录B：冻结确认性判定</h1>
+<ol type="1">
+<li>高质量集合固定为每个QUBO最低10%能量秩，不改为5%、20%或事后最优分位数；</li>
+<li>主统计单位为独立CVRP种子，不把子问题或shots当作独立样本；</li>
+<li>主比较为同一QUBO完整状态空间上的均匀随机分布；</li>
+<li>判定规则为硬件减随机的95%种子bootstrap下界大于0，且双侧精确符号翻转检验<math display="inline" xmlns="http://www.w3.org/1998/Math/MathML"><semantics><mrow><mi>p</mi><mo>&lt;</mo><mn>0.05</mn></mrow><annotation encoding="application/x-tex">p&lt;0.05</annotation></semantics></math>；</li>
+<li>路线改善、容量修复和组合门槛只作为下游诊断，不改变量子候选质量判定；</li>
+<li>所有预注册种子进入主结果；无局部余量实例按零改善纳入总体端到端统计。</li>
+</ol>
+</body>
+</html>
